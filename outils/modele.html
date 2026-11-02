@@ -722,7 +722,7 @@ let wasNarrow = narrow();
 window.addEventListener("resize", () => { const n = narrow(); if (n !== wasNarrow) { wasNarrow = n; if (state.view === "jour" && sheetEl.hidden) render(); } });
 
 /* ---------- mise à jour de la page publique (propriétaire uniquement) ---------- */
-const PUBLISH_TASK = "trig_01D7x9E5ad8SVaUMk6VqL7Q6", REMOTE = "Claude Code Remote";
+const PUBLISH_TASK = "trig_01NNBiwYpqTgKT9D6aadFmTQ", REMOTE = "Claude Code Remote";
 async function setupPublishButton(){
   const mcp = window.claude ? await window.claude.use("mcp") : null;
   if (!mcp) return;
