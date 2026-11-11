@@ -365,7 +365,7 @@ function clean(d){
   if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) return null;
   return { id: d.id, date: x.date, debut: x.debut, fin: x.fin, s, e, salle: String(x.salle || ""), salleId: typeof x.salleId === "string" ? x.salleId : "", batiment: String(x.batiment || ""), intitule: String(x.intitule || "Sans titre"),
            demandeur: String(x.demandeur || ""), statut: ["Confirmée","Demandée","Annulée"].includes(x.statut) ? x.statut : "Confirmée",
-           remarques: String(x.remarques || ""), auteur: typeof x.auteur === "string" ? x.auteur : null, modifieLe: x.modifieLe || null };
+           remarques: String(x.remarques || ""), aussiMob: x.aussiMob === true, auteur: typeof x.auteur === "string" ? x.auteur : null, modifieLe: x.modifieLe || null };
 }
 const active = () => state.items.filter(i => i.statut !== "Annulée");
 function conflictsOf(rec, excludeId){
@@ -376,10 +376,14 @@ function conflictsOf(rec, excludeId){
 /* Créneaux occupés dans le planning de la mobilisation (copie mise à jour chaque heure par la tâche).
    On compare par nom de salle et de bâtiment, sans tenir compte des majuscules ni des espaces. */
 const norm = x => String(x || "").toLowerCase().replace(/\s+/g, " ").trim();
+/* Un événement coché « aussi inscrit au planning de la mobilisation » n'est pas en conflit avec ce planning,
+   et le créneau correspondant de la mobilisation (même salle, horaires qui se chevauchent) n'est pas compté une seconde fois. */
 function extConflictsOf(rec){
-  if (!hasRoom(rec)) return [];
+  if (!hasRoom(rec) || rec.aussiMob) return [];
   const n = norm(nameOf(rec)), b = norm(batOf(rec));
-  return state.ext.filter(o => o.date === rec.date && norm(o.salle) === n && (!o.batiment || !b || norm(o.batiment) === b) && o.s < rec.e && rec.s < o.e);
+  const same = o => norm(o.salle) === n && (!o.batiment || !b || norm(o.batiment) === b);
+  const twins = active().filter(i => i.aussiMob && i.date === rec.date && i.id !== rec.id && hasRoom(i) && norm(nameOf(i)) === n);
+  return state.ext.filter(o => o.date === rec.date && same(o) && o.s < rec.e && rec.s < o.e && !twins.some(t => o.s < t.e && t.s < o.e));
 }
 const extLabel = list => list.map(o => `${lab(o.s)}–${lab(o.e)}`).join(", ");
 function conflictIds(){
@@ -693,7 +697,7 @@ function markBusyRooms(excludeId){
     if (date && e0 > s0) {
       const rec = {date, s: s0, e: e0, salleId: o.value, salle: (ROOM_BY_ID[o.value] || {}).n || "", batiment: (ROOM_BY_ID[o.value] || {}).b || ""};
       busy = conflictsOf({...rec, key: o.value}, excludeId).map(x => `${lab(x.s)}–${lab(x.e)}`);
-      busy = busy.concat(extConflictsOf(rec).map(x => `${lab(x.s)}–${lab(x.e)} (mobilisation)`));
+      if (!($("f-aussimob") && $("f-aussimob").checked)) busy = busy.concat(extConflictsOf({...rec, id: excludeId}).map(x => `${lab(x.s)}–${lab(x.e)} (mobilisation)`));
     }
     o.textContent = busy.length ? `${base} — occupée ${busy.join(", ")}` : base;
     o.classList.toggle("busy", busy.length > 0);
@@ -734,6 +738,7 @@ function form(it, preset){
     <label for="f-demandeur">Intervenant-e <span class="hint">facultatif</span><input class="field" id="f-demandeur" maxlength="120" value="${esc(p.demandeur || "")}"></label>
     <label for="f-statut">Statut<select class="field" id="f-statut">${["Confirmée","Demandée","Annulée"].filter(x => it || x !== "Annulée").map(x => `<option ${x === (p.statut || "Confirmée") ? "selected" : ""}>${x}</option>`).join("")}</select></label>
     <label for="f-remarques">Remarques <span class="hint">facultatif</span><textarea class="field" id="f-remarques" rows="3" maxlength="600">${esc(p.remarques || "")}</textarea></label>
+    <label class="check" for="f-aussimob"><input type="checkbox" id="f-aussimob" ${p.aussiMob ? "checked" : ""}><span>Événement aussi inscrit au planning de la mobilisation<br><span class="hint" style="font-size:13px;color:var(--muted)">Le créneau de la mobilisation dans la même salle ne sera alors pas signalé comme un conflit.</span></span></label>
     <div id="formMsg" hidden></div>
     <div class="actions">
       <button type="submit" class="btn primary" id="saveBtn">Enregistrer</button>
@@ -744,7 +749,7 @@ function form(it, preset){
   </form>`);
   const fm = $("resForm"); let force = false, armedDel = false;
   markBusyRooms(it && it.id);
-  for (const id of ["f-date","f-debut","f-fin"]) $(id).addEventListener("change", () => markBusyRooms(it && it.id));
+  for (const id of ["f-date","f-debut","f-fin","f-aussimob"]) $(id).addEventListener("change", () => markBusyRooms(it && it.id));
   /* Nouvelle réservation uniquement : changer l'heure de début décale l'heure de fin en gardant la même durée (sans dépasser 23h). */
   let prevDebut = toMin($("f-debut").value);
   if (!it) $("f-debut").addEventListener("change", () => {
@@ -759,14 +764,14 @@ function form(it, preset){
     ev.preventDefault();
     const room = ROOM_BY_ID[$("f-salle").value];
     const rec = { intitule: $("f-intitule").value.trim(), salleId: room ? room.id : "", salle: room ? room.n : "", batiment: room ? room.b : "", date: $("f-date").value,
-      debut: $("f-debut").value, fin: $("f-fin").value, demandeur: $("f-demandeur").value.trim(), statut: $("f-statut").value, remarques: $("f-remarques").value.trim() };
+      debut: $("f-debut").value, fin: $("f-fin").value, demandeur: $("f-demandeur").value.trim(), statut: $("f-statut").value, remarques: $("f-remarques").value.trim(), aussiMob: $("f-aussimob").checked };
     if (!rec.intitule) return say("Indiquez l'intitulé de l'événement."), $("f-intitule").focus();
     if (!rec.date) return say("Indiquez la date."), $("f-date").focus();
     const s2 = toMin(rec.debut), e2 = toMin(rec.fin);
     if (e2 <= s2) return say("L'heure de fin doit être après l'heure de début."), $("f-fin").focus();
     if (rec.statut !== "Annulée" && room) {
       const c = conflictsOf({...rec, key: room.id, s: s2, e: e2}, it && it.id);
-      const x2 = extConflictsOf({...rec, s: s2, e: e2});
+      const x2 = extConflictsOf({...rec, id: it && it.id, s: s2, e: e2});
       if ((c.length || x2.length) && !force) {
         force = true; $("saveBtn").textContent = "Enregistrer malgré le conflit";
         const parts = [];
